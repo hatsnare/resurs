@@ -1,0 +1,117 @@
+import time
+import serial
+from pynput import keyboard
+
+# Ustawienia połączenia szeregowego
+port = 'COM3'  # Zamień na odpowiedni port
+baudrate = 9600  # Prędkość transmisji
+timeout = 2  # Timeout w sekundach
+
+# Inicjalizacja połączenia szeregowego
+ser = serial.Serial(port=port, baudrate=baudrate, timeout=timeout)
+
+# Zmienna globalna do przechowywania stanu klawisza strzałki w górę
+arrow_up_pressed = False
+cycle_start_time = None
+last_cycle_duration = 0
+
+# Zmienna udźwig nominalny
+udzwig_nominalny = 1000  # Przykładowy udźwig nominalny w kilogramach
+
+# Zmienne do przechowywania sumy wyników (cykli czasu), liczby cykli i sumy czasów cykli
+suma_wynikow = 0
+ilosc_cykli = 0
+suma_czasow_cykli = 0
+
+# Zmienna resurs inicjowana na 0%
+resurs = 0
+
+# Limit czasu cykli dla grupy natężenia pracy 2M
+limit_czasu_cykli = 1600 * 3600  # 1600 godzin przeliczone na sekundy
+
+def on_press(key):
+    global arrow_up_pressed, cycle_start_time
+    try:
+        if key == keyboard.Key.up:
+            if not arrow_up_pressed:
+                arrow_up_pressed = True
+                cycle_start_time = time.time()
+    except AttributeError:
+        pass
+
+def on_release(key):
+    global arrow_up_pressed, cycle_start_time, last_cycle_duration, ilosc_cykli, suma_czasow_cykli, resurs
+    try:
+        if key == keyboard.Key.up:
+            if arrow_up_pressed:
+                arrow_up_pressed = False
+                cycle_end_time = time.time()
+                last_cycle_duration = cycle_end_time - cycle_start_time
+                ilosc_cykli += 1
+                suma_czasow_cykli += last_cycle_duration
+                print(f'Czas ostatniego cyklu: {last_cycle_duration:.2f} sekund')
+                print(f'Ilość cykli: {ilosc_cykli}')
+                print(f'Suma czasów cykli: {suma_czasow_cykli:.2f} sekund')
+
+                ciezar = odczytaj_ciezar()
+                print(f"Ciężar: {ciezar:.2f} kg")
+                if ciezar < 100:  # Warunek końca cyklu
+                    oblicz_wynik(ciezar)
+
+                # Sprawdzenie przekroczenia limitu czasu cykli
+                if suma_czasow_cykli > limit_czasu_cykli:
+                    print("Osiągnięto limit czasu cykli!")
+                    # Dodatkowa logika po przekroczeniu limitu
+
+    except AttributeError:
+        pass
+
+# Listener klawiatury
+listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+listener.start()
+
+# Funkcja do odczytu ciężaru z portu szeregowego
+def odczytaj_ciezar():
+    buffer = ""
+    start_time = time.time()
+    while True:
+        if ser.in_waiting > 0:
+            znak = ser.read().decode('ascii')
+            if znak:
+                buffer += znak
+                if buffer.startswith('!') and buffer.endswith('#'):
+                    ramka = buffer[1:-1]  # Usunięcie znaków '!' i '#'
+                    buffer = ""
+                    try:
+                        ciezar = float(ramka)
+                        return ciezar
+                    except ValueError:
+                        return 0
+        if time.time() - start_time > 2:
+            break
+    return 0
+
+# Funkcja do obliczenia wyniku
+
+def oblicz_wynik(ciezar):
+    global suma_wynikow, last_cycle_duration, udzwig_nominalny, resurs
+    wynik = (ciezar / udzwig_nominalny) ** 3 * last_cycle_duration
+    suma_wynikow += wynik  # Dodanie wyniku do sumy wyników
+    resurs = (suma_wynikow / udzwig_nominalny) * 100  # Resurs w procentach
+    resurs = min(max(resurs, 0), 100)  # Ograniczenie resursu do zakresu od 0% do 100%
+    print(f'Wynik po mnożeniu: {wynik}')
+    print(f'Resurs: {resurs:.2f}%')
+
+# Główna pętla do cyklicznego odczytu ciężaru
+def main_loop():
+    while True:
+        ciezar = odczytaj_ciezar()
+        print(f"Ciężar: {ciezar:.2f} kg")
+        time.sleep(0.5)
+
+# Rozpoczęcie głównej pętli
+main_loop()
+
+# Zatrzymanie nasłuchiwania klawiatury po zakończeniu programu
+listener.join()
+ser.close()
